@@ -6,9 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 
-const TRAY_VERSION:   &str = env!("CARGO_PKG_VERSION");
-const TRAY_ASSET:     &str = "wallpaper-tray-linux-x86_64";
-const PICKER_VERSION: &str = env!("CARGO_PKG_VERSION"); // placeholder — picker reads from its own __init__.py
+const TRAY_VERSION: &str = env!("CARGO_PKG_VERSION");
+const TRAY_ASSET:   &str = "wallpaper-tray-linux-x86_64";
 
 #[derive(Deserialize)]
 struct VersionResponse {
@@ -107,22 +106,36 @@ fn fetch_latest(cfg: &Config, app: &str) -> Option<String> {
 }
 
 fn read_picker_version(cfg: &Config) -> String {
-    // Read __version__ from wallpaper_picker/__init__.py
-    // Project dir is detected relative to the wallpaper-picker config location
-    let home = std::env::var("HOME").unwrap_or_default();
-    let init = PathBuf::from(&home)
-        .join("wallpaper-picker/wallpaper_picker/__init__.py");
-    let Ok(content) = fs::read_to_string(&init) else {
-        return String::new();
+    // Prefer project_dir from config (written by the picker on startup).
+    // Fall back to binary-relative discovery for backwards compatibility.
+    let candidates: Vec<PathBuf> = {
+        let mut v = Vec::new();
+        if !cfg.project_dir.is_empty() {
+            v.push(PathBuf::from(&cfg.project_dir)
+                .join("wallpaper_picker/__init__.py"));
+        }
+        // Derive from binary: binary is at <project>/linux-wallpaperengine/build/output/…
+        if !cfg.assets_dir.is_empty() {
+            // assets_dir is at <project>/linux-wallpaperengine/assets or Steam path
+            // not reliable, skip
+        }
+        // Last resort: common default location
+        let home = std::env::var("HOME").unwrap_or_default();
+        v.push(PathBuf::from(&home)
+            .join("wallpaper-picker/wallpaper_picker/__init__.py"));
+        v
     };
-    // Parse: __version__ = "1.0.3"
-    for line in content.lines() {
-        if line.starts_with("__version__") {
-            if let Some(v) = line.split('"').nth(1) {
-                return v.to_string();
-            }
-            if let Some(v) = line.split('\'').nth(1) {
-                return v.to_string();
+
+    for init in candidates {
+        let Ok(content) = fs::read_to_string(&init) else { continue };
+        for line in content.lines() {
+            if line.starts_with("__version__") {
+                if let Some(v) = line.split('"').nth(1) {
+                    return v.to_string();
+                }
+                if let Some(v) = line.split('\'').nth(1) {
+                    return v.to_string();
+                }
             }
         }
     }

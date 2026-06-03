@@ -24,6 +24,8 @@ pub struct Config {
     pub update_key: String,
     #[serde(default = "default_fullscreen_pause")]
     pub fullscreen_pause: bool,
+    #[serde(default)]
+    pub project_dir: String,
 }
 
 
@@ -40,6 +42,7 @@ impl Default for Config {
             update_channel: default_update_channel(),
             update_key: String::new(),
             fullscreen_pause: default_fullscreen_pause(),
+            project_dir: String::new(),
         }
     }
 }
