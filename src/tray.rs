@@ -1,24 +1,25 @@
 use ksni::menu::StandardItem;
 use ksni::{MenuItem, ToolTip, Tray};
 
-use crate::{config, service, wallpaper};
+use crate::{config, service, updater, wallpaper};
 
 pub struct WallpaperTray {
-    pub service: String,
-    pub recents: Vec<wallpaper::Wallpaper>,
-    pub active:  bool,
+    pub service:          String,
+    pub recents:          Vec<wallpaper::Wallpaper>,
+    pub active:           bool,
+    pub update_available: Option<String>,
 }
 
 impl WallpaperTray {
     pub fn new() -> Self {
-        let cfg    = config::load();
-        let active = service::is_active(&cfg.service_name);
+        let cfg     = config::load();
+        let active  = service::is_active(&cfg.service_name);
         let recents = wallpaper::resolve_recents(&cfg.recent_wallpapers);
-        Self { service: cfg.service_name, recents, active }
+        Self { service: cfg.service_name, recents, active, update_available: None }
     }
 
     fn refresh(&mut self) {
-        let cfg     = config::load();
+        let cfg      = config::load();
         self.service = cfg.service_name.clone();
         self.active  = service::is_active(&cfg.service_name);
         self.recents = wallpaper::resolve_recents(&cfg.recent_wallpapers);
@@ -26,24 +27,47 @@ impl WallpaperTray {
 }
 
 impl Tray for WallpaperTray {
-    fn id(&self) -> String {
-        "wallpaper-tray".into()
-    }
+    fn id(&self) -> String { "wallpaper-tray".into() }
 
     fn icon_name(&self) -> String {
-        "preferences-desktop-wallpaper".into()
+        if self.update_available.is_some() {
+            "software-update-available".into()
+        } else {
+            "preferences-desktop-wallpaper".into()
+        }
     }
 
     fn tool_tip(&self) -> ToolTip {
+        let description = match (&self.update_available, self.active) {
+            (Some(v), _) => format!("Update verfügbar: {v}"),
+            (_, true)    => "Service aktiv".into(),
+            _            => "Service inaktiv".into(),
+        };
         ToolTip {
             title: "Wallpaper Engine – Linux".into(),
-            description: if self.active { "Service aktiv".into() } else { "Service inaktiv".into() },
+            description,
             ..Default::default()
         }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items: Vec<MenuItem<Self>> = Vec::new();
+
+        // Update banner
+        if let Some(ref version) = self.update_available {
+            let v = version.clone();
+            items.push(MenuItem::Standard(StandardItem {
+                label: format!("↑  Update verfügbar — {v}"),
+                activate: Box::new(|this: &mut Self| {
+                    let cfg = config::load();
+                    if let Err(e) = updater::download_and_apply(&cfg) {
+                        eprintln!("Update fehlgeschlagen: {e}");
+                    }
+                }),
+                ..Default::default()
+            }));
+            items.push(MenuItem::Separator);
+        }
 
         // Recent wallpapers
         if !self.recents.is_empty() {
@@ -82,26 +106,35 @@ impl Tray for WallpaperTray {
 
         items.push(MenuItem::Separator);
 
-        // Service status (disabled label)
+        // Status + manual pause/resume
         items.push(MenuItem::Standard(StandardItem {
-            label: if self.active { "● Service aktiv".into() } else { "○ Service inaktiv".into() },
+            label:   if self.active { "● Aktiv".into() } else { "○ Inaktiv".into() },
             enabled: false,
             ..Default::default()
         }));
 
-        // Toggle service
-        items.push(MenuItem::Standard(StandardItem {
-            label: if self.active { "Service stoppen".into() } else { "Service starten".into() },
-            activate: Box::new(|this: &mut Self| {
-                service::toggle(&this.service);
-                this.active = service::is_active(&this.service);
-            }),
-            ..Default::default()
-        }));
+        if self.active {
+            items.push(MenuItem::Standard(StandardItem {
+                label: "⏸  Pausieren".into(),
+                activate: Box::new(|this: &mut Self| {
+                    service::stop(&this.service);
+                    this.active = false;
+                }),
+                ..Default::default()
+            }));
+        } else {
+            items.push(MenuItem::Standard(StandardItem {
+                label: "▶  Fortsetzen".into(),
+                activate: Box::new(|this: &mut Self| {
+                    service::start(&this.service);
+                    this.active = service::is_active(&this.service);
+                }),
+                ..Default::default()
+            }));
+        }
 
         items.push(MenuItem::Separator);
 
-        // Open GUI
         items.push(MenuItem::Standard(StandardItem {
             label: "Öffnen".into(),
             activate: Box::new(|_| {
@@ -110,7 +143,6 @@ impl Tray for WallpaperTray {
             ..Default::default()
         }));
 
-        // Quit
         items.push(MenuItem::Standard(StandardItem {
             label: "Beenden".into(),
             activate: Box::new(|_| std::process::exit(0)),
